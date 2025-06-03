@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+
+# ansiblx
+#
+# This script switches your local Ansible commands to a chosen
+# ansible-mitogen virtual environment (with, without Mitogen, or custom config).
+#
+# Steps:
+#   1) Ensure ~/.local/bin exists; create it if needed.
+#   2) Warn if ~/.local/bin is not in $PATH.
+#   3) Scan ~/.venvs for directories named “ansible-mitogen-*”.
+#   4) For each venv, check if ansible-customized.cfg exists; if so, offer it.
+#   5) Present an fzf (or manual) menu:
+#        ansible-mitogen-<version>
+#        ansible-mitogen-<version> (non-mitogen)
+#        ansible-mitogen-<version> (user-customized-cfg)
+#   6) Update ~/.ansible.cfg → chosen config file inside that venv.
+#   7) Remove old ansible* symlinks in ~/.local/bin.
+#   8) Create new symlinks in ~/.local/bin for the chosen venv’s ansible* binaries.
+#
+# Usage:
+#   chmod +x ~/.local/bin/ansiblx
+#   ansiblx
+
+set -euo pipefail
+
+# Directory where user‐installed executables live and should already be in PATH
+LOC_BIN="$HOME/.local/bin"
+
+# Root directory where ansible-mitogen venvs live
+VENV_ROOT="$HOME/.venvs"
+
+# Helper: print error and exit
+die() {
+  printf "Error: %s\n" "$*" >&2
+  exit 1
+}
+
+if [[ ! -d "$LOC_BIN" ]]; then
+  echo "Creating $LOC_BIN since it does not exist..."
+  mkdir -p "$LOC_BIN"
+fi
+
+case ":$PATH:" in
+  *":$LOC_BIN:"*) 
+    ;;
+  *)
+    echo "⚠️  Warning: $LOC_BIN is not in your \$PATH."
+    echo "   To fix, add to your shell rc (e.g. ~/.bashrc or ~/.zshrc):"
+    echo "     export PATH=\"$LOC_BIN:\$PATH\""
+    ;;
+esac
+
+if [[ ! -d "$VENV_ROOT" ]]; then
+  echo "✨ No venvs directory found at $VENV_ROOT"
+  exit 1
+fi
+
+dirs=()
+while IFS= read -r -d '' d; do
+  dirs+=("$(basename "$d")")
+done < <(find "$VENV_ROOT" -maxdepth 1 -type d -name "ansible-mitogen-*" -print0)
+
+if [[ ${#dirs[@]} -eq 0 ]]; then
+  echo "✨ No \"ansible-mitogen-*\" venvs under $VENV_ROOT"
+  exit 1
+fi
+
+choices=()
+for v in "${dirs[@]}"; do
+  # “with Mitogen”
+  choices+=("$v")
+  # “(non-mitogen)”
+  choices+=("$v (non-mitogen)")
+  # “(user-customized-cfg)” if ansible-customized.cfg exists
+  if [[ -f "$VENV_ROOT/$v/ansible-customized.cfg" ]]; then
+    choices+=("$v (user-customized-cfg)")
+  fi
+done
+
+if command -v fzf >/dev/null 2>&1; then
+  selection=$(printf "%s\n" "${choices[@]}" | fzf --height=10 --reverse --prompt="ansiblx> ")
+  if [[ -z "$selection" ]]; then
+    echo "✋ Selection cancelled."
+    exit 1
+  fi
+else
+  echo "fzf not found. Please type one of the following exactly:"
+  printf "  %s\n" "${choices[@]}"
+  read -r -p "Your choice: " selection
+  if [[ -z "$selection" ]]; then
+    echo "✋ Selection cancelled."
+    exit 1
+  fi
+  if ! printf "%s\n" "${choices[@]}" | grep -Fxq "$selection"; then
+    die "Invalid choice: $selection"
+  fi
+fi
+
+use_non_mitogen=false
+use_custom=false
+base_name="$selection"
+
+if [[ "$selection" == *"(non-mitogen)" ]]; then
+  use_non_mitogen=true
+  base_name="${selection% (non-mitogen)}"
+elif [[ "$selection" == *"(user-customized-cfg)" ]]; then
+  use_custom=true
+  base_name="${selection% (user-customized-cfg)}"
+fi
+
+VENV_DIR="$VENV_ROOT/$base_name"
+
+[[ -d "$VENV_DIR" ]] || die "Directory not found: $VENV_DIR"
+
+if [[ "$use_custom" == true ]]; then
+  TARGET_CFG="$VENV_DIR/ansible-customized.cfg"
+elif [[ "$use_non_mitogen" == true ]]; then
+  TARGET_CFG="$VENV_DIR/ansible-non-mitogen.cfg"
+else
+  TARGET_CFG="$VENV_DIR/ansible.cfg"
+fi
+
+[[ -f "$TARGET_CFG" ]] || die "Config file not found: $TARGET_CFG"
+
+if [[ -L "$HOME/.ansible.cfg" || -f "$HOME/.ansible.cfg" ]]; then
+  rm -f "$HOME/.ansible.cfg"
+fi
+ln -s "$TARGET_CFG" "$HOME/.ansible.cfg"
+
+while IFS= read -r -d '' link; do
+  target="$(readlink "$link")"
+  if [[ "$target" == "$VENV_ROOT/ansible-mitogen-"*"/bin/ansible"* ]]; then
+    rm -f "$link"
+  fi
+done < <(find "$LOC_BIN" -maxdepth 1 -type l -name "ansible*" -print0)
+
+while IFS= read -r -d '' exe; do
+  name="$(basename "$exe")"
+  ln -s "$exe" "$LOC_BIN/$name"
+done < <(find "$VENV_DIR/bin" -maxdepth 1 -type f -name "ansible*" -print0)
+
+suffix=""
+if [[ "$use_custom" == true ]]; then
+  suffix=" (user-customized-cfg)"
+elif [[ "$use_non_mitogen" == true ]]; then
+  suffix=" (non-mitogen)"
+fi
+
+echo "✅ Switched to '$base_name'$suffix"
+echo "   → ~/.ansible.cfg → $(readlink ~/.ansible.cfg)"
+echo "   → Symlinks in $LOC_BIN point to $VENV_DIR/bin/ansible*"
+echo "   → ansible version:  $(ansible --version | head -n1)"
+echo "   → ansible-playbook: $(ansible-playbook --version | head -n1)"

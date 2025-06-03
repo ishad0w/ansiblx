@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+
+# ansiblex-installer
+#
+# This script creates Python virtual environments for specific Ansible/Mitogen versions.
+# It supports:
+#   • Passing a single major version: 10 or 11
+#   • Passing “--all” to create both version‐10 and version‐11 environments
+#
+# Within each venv, two config files will be created:
+#   1. ansible.cfg             → includes Mitogen strategy
+#   2. ansible-non-mitogen.cfg → same settings except no Mitogen lines
+#
+# Usage:
+#   ansiblex-installer <major-version>
+#   ansiblex-installer --all
+#
+# <major-version> can be:
+#   10    → Create Ansible 10.6.0 environment
+#   11    → Create Ansible 11.6.0 environment
+#   --all → Create both Ansible 10.x and 11.x environments
+#
+# Examples:
+#   ansiblex-installer 10
+#   ansiblex-installer 11
+#   ansiblex-installer --all
+
+set -euo pipefail
+
+# Print usage and exit
+print_usage() {
+  echo "Usage: $0 <major-version>"
+  echo "  where <major-version> can be '10', '11', or '--all'"
+  echo "Options:"
+  echo "  10       Create Ansible 10.6.0 environment"
+  echo "  11       Create Ansible 11.6.0 environment"
+  echo "  --all    Create both Ansible 10.x and 11.x environments"
+}
+
+# If no or too many arguments, show help
+if [[ $# -ne 1 ]]; then
+  print_usage
+  exit 1
+fi
+
+ARG="$1"
+declare -a MAJORS_TO_INSTALL=()
+
+# Determine which major versions to create
+case "$ARG" in
+  10)
+    MAJORS_TO_INSTALL=(10)
+    ;;
+  11)
+    MAJORS_TO_INSTALL=(11)
+    ;;
+  --all)
+    MAJORS_TO_INSTALL=(10 11)
+    ;;
+  *)
+    echo "Error: Unsupported argument: '$ARG'"
+    print_usage
+    exit 1
+    ;;
+esac
+
+# For each requested major version, create a venv
+for MAJOR in "${MAJORS_TO_INSTALL[@]}"; do
+  # Map major → specific package versions
+  case "$MAJOR" in
+    10)
+      MITOGEN_VER="0.3.18"
+      CORE_VER="2.17.6"
+      ANSIBLE_VER="10.6.0"
+      LINT_VER="24.9.2"
+      ;;
+    11)
+      MITOGEN_VER="0.3.24"
+      CORE_VER="2.18.6"
+      ANSIBLE_VER="11.6.0"
+      LINT_VER="25.4.0"
+      ;;
+  esac
+
+  FULL_VER="$ANSIBLE_VER"
+  VENV_NAME="ansible-mitogen-${FULL_VER}"
+  VENV_DIR="$HOME/.venvs/${VENV_NAME}"
+
+  # Skip if it already exists
+  if [[ -d "$VENV_DIR" ]]; then
+    echo "Warning: Virtual environment already exists at $VENV_DIR, skipping."
+    continue
+  fi
+
+  echo "=== Creating virtual environment: $VENV_DIR ==="
+  python3 -m venv "$VENV_DIR"
+  source "$VENV_DIR/bin/activate"
+
+  echo "--- Installing packages for Ansible $FULL_VER ---"
+  pip install --upgrade pip cffi jmespath \
+      boto3 pywinrm \
+      mitogen=="${MITOGEN_VER}" \
+      ansible-core=="${CORE_VER}" \
+      ansible=="${ANSIBLE_VER}" \
+      ansible-lint=="${LINT_VER}"
+
+  echo "--- Locating Mitogen strategy plugin path ---"
+  MITOGEN_PATH=$(find "$($VENV_DIR/bin/python3 - <<<'import site; print(site.getsitepackages()[0])')" \
+                     -type d -name 'ansible_mitogen' | head -n1)/plugins/strategy
+
+  if [[ ! -d "$MITOGEN_PATH" ]]; then
+    deactivate
+    echo "Error: Could not find ansible_mitogen/plugins/strategy in $VENV_DIR"
+    exit 1
+  fi
+  echo "Found Mitogen plugin at: $MITOGEN_PATH"
+
+  echo "--- Writing ansible.cfg (with Mitogen) inside the virtual environment ---"
+  CACHE_DIR="/tmp/ansible-mitogen-${FULL_VER}-cache"
+  cat <<EOL > "$VENV_DIR/ansible.cfg"
+[defaults]
+strategy_plugins = ${MITOGEN_PATH}
+strategy = mitogen_linear
+
+gathering = smart
+fact_caching = jsonfile
+fact_caching_connection = ${CACHE_DIR}
+
+forks = 10
+EOL
+
+  echo "--- Writing ansible-non-mitogen.cfg (no Mitogen lines) inside the virtual environment ---"
+  cat <<EOL > "$VENV_DIR/ansible-non-mitogen.cfg"
+[defaults]
+gathering = smart
+fact_caching = jsonfile
+fact_caching_connection = ${CACHE_DIR}
+
+forks = 10
+EOL
+
+  deactivate
+  echo "✅ Virtual environment '$VENV_NAME' created at $VENV_DIR"
+  echo "   • ansible.cfg             → with Mitogen strategy"
+  echo "   • ansible-non-mitogen.cfg → without Mitogen lines"
+  echo
+done
+
+echo "All requested virtual environments have been processed."
