@@ -49,7 +49,7 @@ Simply download the latest `ansiblx-installer` script into any directory, make i
 
 ```bash
 # Download:
-curl -Lo ansiblx-installer https://raw.githubusercontent.com/ishad0w/ansiblx-installer/refs/heads/main/ansiblx-installer
+curl -Lo ansiblx-installer https://raw.githubusercontent.com/ishad0w/ansiblx/refs/heads/main/ansiblx-installer
 chmod +x ansiblx-installer
 ```
 
@@ -61,7 +61,7 @@ Download `ansiblx` into `~/.local/bin` (or another folder already in your `PATH`
 
 ```bash
 # Download:
-curl -Lo ~/.local/bin/ansiblx https://raw.githubusercontent.com/ishad0w/ansiblx-installer/refs/heads/main/ansiblx
+curl -Lo ~/.local/bin/ansiblx https://raw.githubusercontent.com/ishad0w/ansiblx/refs/heads/main/ansiblx
 chmod +x ~/.local/bin/ansiblx
 
 # Ensure ~/.local/bin is in your PATH (if not already):
