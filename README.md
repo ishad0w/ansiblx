@@ -1,4 +1,4 @@
-# Ansiblx (Ansible + Mitogen) Multi‐Version Manager
+# Ansiblx (Ansible + Mitogen) Version Manager
 
 This repository provides two scripts to manage multiple Ansible/Mitogen virtual environments and switch between them seamlessly:
 
